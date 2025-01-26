@@ -1,5 +1,10 @@
 import os
 import json
+import pyaudio
+import scipy.io.wavfile as wavfile
+import numpy as np
+import threading
+import time
 from dotenv import load_dotenv
 from openai import OpenAI
 import gradio as gr
@@ -133,6 +138,86 @@ def chat(history):
 
     return history, image
 
+# Global variables for audio recording
+recording = False
+audio_data = None
+stop_recording = threading.Event()
+start_time = None
+
+def get_input_device():
+    p = pyaudio.PyAudio()
+    device_index = None
+
+    for i in range(p.get_device_count()):
+        device_info = p.get_device_info_by_index(i)
+        print(f"Device {i}: {device_info['name']}")
+        if device_info['maxInputChannels'] > 0:
+            device_index = i
+            break
+
+    p.terminate()
+    return device_index
+
+def listen_audio(timeout=10):
+    global recording, audio_data, stop_recording, start_time
+
+    device_index = get_input_device()
+    if device_index is None:
+        print("No input device found")
+        return None, None
+    
+    # Reset global variables
+    recording = True
+    stop_recording.clear()
+    audio_data = []
+    start_time = time.time()
+    
+    # Set sample rate and channels
+    sample_rate = 44100
+    chunk = 1024
+    
+    p = pyaudio.PyAudio()
+    stream = p.open(format=pyaudio.paInt16,
+                    channels=1,
+                    rate=sample_rate,
+                    input=True,
+                    input_device_index=device_index,
+                    frames_per_buffer=chunk)
+
+    while recording and (time.time() - start_time) < timeout:
+        if stop_recording.is_set():
+            break
+        data = stream.read(chunk, exception_on_overflow=False)
+        audio_data.append(data)
+
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+    
+    # Stop recording
+    recording = False
+
+    duration = time.time() - start_time
+    print(f"Recording duration: {duration:.2f} seconds")
+    
+    if audio_data:
+        play_recorded_audio(audio_data, sample_rate)
+        return audio_array, sample_rate
+    
+    return None, None
+
+def play_recorded_audio(audio_frames, sample_rate):
+    buffer = BytesIO()
+    with wave.open(buffer, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(b''.join(audio_frames))
+
+    buffer.seek(0)
+    audio = AudioSegment.from_file(buffer)
+    play(audio)
+
 with gr.Blocks() as ui:
     with gr.Row():
         chatbot = gr.Chatbot(height=500, type="messages")
@@ -140,11 +225,28 @@ with gr.Blocks() as ui:
     with gr.Row():
         entry = gr.Textbox(label="Chat with our AI Assistant:")
     with gr.Row():
+        audio_button = gr.Button("Start Audio")
+    with gr.Row():
         clear = gr.Button("Clear")
 
     def do_entry(message, history):
         history += [{"role":"user", "content": message}]
         return "", history
+
+    def toggle_recording():
+        global recording, stop_recording
+        if recording:
+            stop_recording.set()
+            return "Start Audio"
+        else:
+            threading.Thread(target=listen_audio, daemon=True).start()
+            return "Finish Audio"
+
+    # Update the button interaction
+    audio_button.click(
+        toggle_recording, 
+        outputs=audio_button
+    )
 
     entry.submit(do_entry, inputs=[entry, chatbot], outputs=[entry, chatbot]).then(
         chat, inputs=chatbot, outputs=[chatbot, image_output]
