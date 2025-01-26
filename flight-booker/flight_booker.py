@@ -46,18 +46,48 @@ price_function = {
     }
 }
 
-tools = [{"type": "function", "function": price_function}]
+def book_ticket(destination_city):
+    print(f"Return ticket booked to {destination_city}")
+
+book_function = {
+    "name": "book_ticket",
+    "description": "Book a return ticket to the destination city. Call this whenever you want to book a ticket, for example when a customer confirms their intent to buy a ticket after knowing the ticket price.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "destination_city": {
+                "type": "string",
+                "description": "The city that the customer wants to travel to",
+            },
+        },
+        "required": ["destination_city"],
+        "additionalProperties": False
+    }
+}
+
+tools = [{"type": "function", "function": price_function}, {"type": "function", "function": book_function}]
 
 def handle_tool_call(message):
     tool_call = message.tool_calls[0]
+    selected_function = tool_call.function.name
     arguments = json.loads(tool_call.function.arguments)
     city = arguments.get("destination_city")
-    price = get_ticket_price(city)
-    response = {
+    if selected_function == "get_ticket_price":
+        print(f'Calling get_ticket_price for {city}')
+        price = get_ticket_price(city)
+        response = {
             "role": "tool",
             "content": json.dumps({"destination_city": city, "price": price}),
             "tool_call_id": tool_call.id
-    }
+        }
+    else:
+        print(f'Calling book_ticket for {city}')
+        book_ticket(city)
+        response = {
+            "role": "tool",
+            "content": f"Return ticket booked to {city}",
+            "tool_call_id": tool_call.id
+        }
     return response, city
 
 def artist(city):
